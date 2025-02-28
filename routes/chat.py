@@ -392,3 +392,58 @@ async def search_messages(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"搜索消息失败: {str(e)}"
         )
+
+@router.delete("/conversations/{conversation_id}/messages")
+async def delete_conversation_messages(
+    conversation_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """删除指定会话的所有聊天记录"""
+    try:
+        # 验证用户是否是会话参与者
+        result = await db.execute(
+            select(Conversation).where(
+                and_(
+                    Conversation.id == conversation_id,
+                    or_(
+                        Conversation.user1_id == current_user.id,
+                        Conversation.user2_id == current_user.id
+                    )
+                )
+            )
+        )
+        conversation = result.scalar()
+        
+        if not conversation:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权访问此会话"
+            )
+        
+        # 删除所有消息
+        await db.execute(
+            Message.__table__.delete().where(
+                Message.conversation_id == conversation_id
+            )
+        )
+        
+        # 更新会话的最后消息时间
+        conversation.last_message_at = datetime.now(timezone.utc)
+        
+        await db.commit()
+        
+        return {
+            "message": "聊天记录已清空",
+            "conversation_id": conversation_id,
+            "cleared_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"删除聊天记录失败: {str(e)}"
+        )
