@@ -12,7 +12,7 @@ from sqlalchemy.future import select
 
 from config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 from models import User, UserProfile
-from dependencies import get_db
+from dependencies import get_db, get_current_user
 
 # 创建路由器
 router = APIRouter(tags=["认证"])
@@ -93,27 +93,58 @@ async def login_for_access_token(request: Token, db: AsyncSession = Depends(get_
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # 创建访问令牌
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = await create_access_token(
-        data={"sub": user.username},
-        expires_delta=access_token_expires
-    )
-    
-    # 返回令牌和用户信息
-    return {
-        "message": "true",
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "profile": {
-                "avatar_url": profile.avatar_url if profile else None,
-                "background_url": profile.background_url if profile else None,
-                "gender": profile.gender if profile else None,
-                "bio": profile.bio if profile else None
-            } if profile else None
+    try:
+        # 创建访问令牌
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = await create_access_token(
+            data={"sub": user.username},
+            expires_delta=access_token_expires
+        )
+        
+        # 更新用户在线状态
+        user.is_online = True
+        user.last_active = datetime.now(timezone.utc)
+        user.current_token = access_token
+        await db.commit()
+        
+        return {
+            "message": "true",
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "profile": {
+                    "avatar_url": profile.avatar_url if profile else None,
+                    "background_url": profile.background_url if profile else None,
+                    "gender": profile.gender if profile else None,
+                    "bio": profile.bio if profile else None
+                } if profile else None
+            }
         }
-    }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@router.post("/logout")
+async def logout(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """用户登出"""
+    try:
+        current_user.is_online = False
+        current_user.last_active = datetime.now(timezone.utc)
+        current_user.current_token = None
+        await db.commit()
+        return {"message": "Successfully logged out"}
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )

@@ -33,13 +33,23 @@ class FriendRequestAction(BaseModel):
     """好友申请处理请求模型"""
     action: str  # accept or reject
 
+class UserListAccess(BaseModel):
+    """用户列表访问请求模型"""
+    root: str
+
 # API路由
-@router.get("/users/all")
+@router.post("/users/all")
 async def get_all_users(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    request: UserListAccess,
+    db: AsyncSession = Depends(get_db)
 ):
-    """获取所有用户列表（包含其好友信息）"""
+    """获取所有用户列表（包含其好友信息、在线状态和用户资料）"""
+    if request.root != "azyasaxi":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无访问权限"
+        )
+    
     result = await db.execute(
         select(User, UserProfile)
         .outerjoin(UserProfile)
@@ -64,8 +74,17 @@ async def get_all_users(
         {
             "id": user.id,
             "username": user.username,
+            "email": user.email,
             "profile": {
                 "avatar_url": profile.avatar_url if profile else None,
+                "background_url": profile.background_url if profile else None,
+                "gender": profile.gender if profile else None,
+                "bio": profile.bio if profile else None
+            } if profile else None,
+            "online_status": {
+                "is_online": user.is_online,
+                "last_active": user.last_active.isoformat() if user.last_active else None,
+                "access_token": user.current_token if user.is_online else None
             },
             "friends": user_friends.get(user.id, [])
         }
@@ -443,4 +462,226 @@ async def delete_friend(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"删除好友失败: {str(e)}"
+        )
+
+@router.get("/users/profile")
+async def get_user_profile(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """获取当前用户的资料"""
+    result = await db.execute(
+        select(UserProfile)
+        .where(UserProfile.user_id == current_user.id)
+    )
+    profile = result.scalars().first()
+    
+    return {
+        "user": {
+            "id": current_user.id,
+            "username": current_user.username,
+            "email": current_user.email,
+        },
+        "profile": {
+            "avatar_url": profile.avatar_url if profile else None,
+            "background_url": profile.background_url if profile else None,
+            "gender": profile.gender if profile else None,
+            "bio": profile.bio if profile else None
+        } if profile else None
+    }
+
+@router.put("/users/profile")
+async def update_user_profile(
+    profile_update: UserProfileUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """更新当前用户的资料"""
+    try:
+        # 查找现有的用户资料
+        result = await db.execute(
+            select(UserProfile)
+            .where(UserProfile.user_id == current_user.id)
+        )
+        profile = result.scalars().first()
+        
+        if profile:
+            # 更新现有资料
+            if profile_update.bio is not None:
+                profile.bio = profile_update.bio
+            if profile_update.avatar_url is not None:
+                profile.avatar_url = profile_update.avatar_url
+            if profile_update.background_url is not None:
+                profile.background_url = profile_update.background_url
+            if profile_update.gender is not None:
+                profile.gender = profile_update.gender
+        else:
+            # 创建新的用户资料
+            profile = UserProfile(
+                user_id=current_user.id,
+                bio=profile_update.bio,
+                avatar_url=profile_update.avatar_url,
+                background_url=profile_update.background_url,
+                gender=profile_update.gender
+            )
+            db.add(profile)
+        
+        await db.commit()
+        await db.refresh(profile)
+        
+        return {
+            "message": "资料更新成功",
+            "profile": {
+                "avatar_url": profile.avatar_url,
+                "background_url": profile.background_url,
+                "gender": profile.gender,
+                "bio": profile.bio
+            }
+        }
+        
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"更新资料失败: {str(e)}"
+        )
+
+@router.get("/users/search")
+async def search_users(
+    query: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """搜索用户（通过用户名或邮箱）"""
+    try:
+        result = await db.execute(
+            select(User, UserProfile)
+            .outerjoin(UserProfile)
+            .where(
+                or_(
+                    User.username.ilike(f"%{query}%"),
+                    User.email.ilike(f"%{query}%")
+                )
+            )
+        )
+        users = result.all()
+        
+        if not users:
+            return {
+                "message": "未找到匹配的用户",
+                "users": []
+            }
+        
+        return {
+            "message": "查询成功",
+            "users": [
+                {
+                    "id": user.id,
+                    "username": user.username,
+                    "email": user.email,
+                    "profile": {
+                        "avatar_url": profile.avatar_url if profile else None,
+                        "gender": profile.gender if profile else None
+                    } if profile else None
+                }
+                for user, profile in users
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"搜索用户失败: {str(e)}"
+        )
+
+@router.get("/users/info/{query}")
+async def get_user_info(
+    query: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """获取指定用户的详细信息（仅限好友）"""
+    try:
+        # 查找目标用户
+        result = await db.execute(
+            select(User, UserProfile)
+            .outerjoin(UserProfile)
+            .where(
+                or_(
+                    User.username == query,
+                    User.email == query
+                )
+            )
+        )
+        user_info = result.first()
+        
+        if not user_info:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="用户不存在"
+            )
+            
+        target_user, target_profile = user_info
+        
+        # 检查是否为好友关系
+        result = await db.execute(
+            select(Friendship).where(
+                or_(
+                    and_(
+                        Friendship.user_id == current_user.id,
+                        Friendship.friend_id == target_user.id
+                    ),
+                    and_(
+                        Friendship.user_id == target_user.id,
+                        Friendship.friend_id == current_user.id
+                    )
+                )
+            )
+        )
+        
+        if not result.scalars().first():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="只能查看好友的详细信息"
+            )
+        
+        # 获取目标用户的好友列表
+        friend_result = await db.execute(
+            select(User)
+            .join(Friendship, User.id == Friendship.friend_id)
+            .where(Friendship.user_id == target_user.id)
+        )
+        friends = friend_result.scalars().all()
+        
+        return {
+            "message": "查询成功",
+            "user": {
+                "id": target_user.id,
+                "username": target_user.username,
+                "email": target_user.email,
+                "profile": {
+                    "avatar_url": target_profile.avatar_url if target_profile else None,
+                    "background_url": target_profile.background_url if target_profile else None,
+                    "gender": target_profile.gender if target_profile else None,
+                    "bio": target_profile.bio if target_profile else None
+                } if target_profile else None,
+                "online_status": {
+                    "is_online": target_user.is_online,
+                    "last_active": target_user.last_active.isoformat() if target_user.last_active else None
+                },
+                "friends": [
+                    {
+                        "id": friend.id,
+                        "username": friend.username
+                    }
+                    for friend in friends
+                ]
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取用户信息失败: {str(e)}"
         )
