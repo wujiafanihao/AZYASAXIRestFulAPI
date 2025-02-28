@@ -5,7 +5,13 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from models import Base, async_engine
-from routes import auth_router, registration_router, verification_router, users_router
+from routes import (
+    auth_router, 
+    registration_router, 
+    verification_router, 
+    users_router,
+    chat_router,
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,6 +39,7 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(registration_router, prefix="/api/v1")
 app.include_router(verification_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
+app.include_router(chat_router, prefix="/api/v1")
 
 # 根路由
 @app.get("/")

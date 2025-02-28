@@ -7,12 +7,13 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import JWTError, jwt
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
-from models import User, AsyncSessionLocal
+from models import User, UserProfile, AsyncSessionLocal
 from config import SECRET_KEY, ALGORITHM
 
 # OAuth2密码授权方案
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/token")
 
 async def get_db() -> AsyncSession:
     """
@@ -57,13 +58,17 @@ async def get_current_user(
         
         # 从数据库获取用户
         result = await db.execute(
-            select(User).where(User.username == username)
+            select(User, UserProfile)
+            .outerjoin(UserProfile)
+            .where(User.username == username)
         )
-        user = result.scalars().first()
+        user_info = result.first()
         
-        if user is None:
+        if not user_info:
             raise credentials_exception
             
+        user, profile = user_info
+        
         return user
         
     except JWTError:

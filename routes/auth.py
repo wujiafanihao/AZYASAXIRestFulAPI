@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
-from models import User
+from models import User, UserProfile
 from dependencies import get_db
 
 # 创建路由器
@@ -60,9 +60,22 @@ async def login_for_access_token(request: Token, db: AsyncSession = Depends(get_
     :param db: 数据库会话
     :return: 包含访问令牌的响应
     """
-    # 查询用户
-    result = await db.execute(select(User).where(User.email == request.email))
-    user = result.scalars().first()
+    # 查询用户和用户资料
+    result = await db.execute(
+        select(User, UserProfile)
+        .outerjoin(UserProfile)
+        .where(User.email == request.email)
+    )
+    user_info = result.first()
+    
+    if not user_info:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户不存在",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    user, profile = user_info
     
     # 验证用户是否存在
     if not user:
@@ -87,9 +100,20 @@ async def login_for_access_token(request: Token, db: AsyncSession = Depends(get_
         expires_delta=access_token_expires
     )
     
-    # 返回令牌
+    # 返回令牌和用户信息
     return {
         "message": "true",
         "access_token": access_token,
-        "token_type": "bearer"
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "profile": {
+                "avatar_url": profile.avatar_url if profile else None,
+                "background_url": profile.background_url if profile else None,
+                "gender": profile.gender if profile else None,
+                "bio": profile.bio if profile else None
+            } if profile else None
+        }
     }
