@@ -7,7 +7,7 @@ from sqlalchemy.future import select
 from sqlalchemy import and_, or_, desc, func
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from models import User, Conversation, Message, Friendship
 from dependencies import get_current_user, get_db
@@ -19,6 +19,11 @@ class MessageCreate(BaseModel):
     """发送消息请求模型"""
     to_username: str  # 接收者用户名
     content: str
+
+class MessageSearch(BaseModel):
+    """消息搜索请求模型"""
+    conversation_id: int
+    content: str  # 搜索关键词
 
 # API路由
 @router.get("/conversations")
@@ -259,3 +264,131 @@ async def get_messages(
         }
         for msg, user in messages
     ]
+
+@router.delete("/messages/{message_id}")
+async def recall_message(
+    message_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """撤回消息（仅限2分钟内的自己发送的消息）"""
+    try:
+        # 查找消息
+        result = await db.execute(
+            select(Message)
+            .where(Message.id == message_id)
+        )
+        message = result.scalar()
+        
+        if not message:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="消息不存在"
+            )
+        
+        # 检查是否是自己发送的消息
+        if message.sender_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="只能撤回自己发送的消息"
+            )
+        
+        # 确保消息创建时间有时区信息
+        message_time = message.created_at
+        if message_time.tzinfo is None:
+            message_time = message_time.replace(tzinfo=timezone.utc)
+        
+        # 检查是否在2分钟内
+        current_time = datetime.now(timezone.utc)
+        time_diff = current_time - message_time
+        
+        if time_diff > timedelta(minutes=2):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="只能撤回2分钟内的消息"
+            )
+        
+        # 删除消息
+        await db.delete(message)
+        await db.commit()
+        
+        return {
+            "message": "消息已撤回",
+            "message_id": message_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"撤回消息失败: {str(e)}"
+        )
+
+@router.post("/messages/search")
+async def search_messages(
+    search: MessageSearch,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """搜索聊天记录"""
+    try:
+        # 验证会话权限
+        result = await db.execute(
+            select(Conversation).where(
+                and_(
+                    Conversation.id == search.conversation_id,
+                    or_(
+                        Conversation.user1_id == current_user.id,
+                        Conversation.user2_id == current_user.id
+                    )
+                )
+            )
+        )
+        conversation = result.scalar()
+        
+        if not conversation:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权访问此会话"
+            )
+        
+        # 搜索消息
+        result = await db.execute(
+            select(Message, User)
+            .join(User, Message.sender_id == User.id)
+            .where(
+                and_(
+                    Message.conversation_id == search.conversation_id,
+                    Message.content.ilike(f"%{search.content}%")
+                )
+            )
+            .order_by(desc(Message.created_at))
+        )
+        messages = result.all()
+        
+        return {
+            "message": "搜索成功",
+            "results": [
+                {
+                    "id": message.id,
+                    "content": message.content,
+                    "created_at": message.created_at.isoformat(),
+                    "is_read": message.is_read,
+                    "sender": {
+                        "id": user.id,
+                        "username": user.username
+                    }
+                }
+                for message, user in messages
+            ]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"搜索消息失败: {str(e)}"
+        )

@@ -107,7 +107,7 @@ class Message(Base):
     conversation_id = Column(Integer, ForeignKey("conversations.id", ondelete="CASCADE"))
     sender_id = Column(Integer, ForeignKey("users.id"))  # 发送者ID
     content = Column(Text)
-    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     is_read = Column(Boolean, default=False)  # 消息是否已读
     read_at = Column(DateTime, nullable=True)  # 读取时间
 
