@@ -12,6 +12,7 @@ from routes import (
     users_router,
     chat_router,
 )
+from AIservices import aiyasaxi_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,6 +41,7 @@ app.include_router(registration_router, prefix="/api/v1")
 app.include_router(verification_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
+app.include_router(aiyasaxi_router, prefix="/api/v1")
 
 # 根路由
 @app.get("/")
