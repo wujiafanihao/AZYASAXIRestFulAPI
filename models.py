@@ -1,12 +1,25 @@
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timezone
+import os
+
+dbBaseURl = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./Azyasaxi.db")
+print(dbBaseURl)
 
 # 数据库配置
-DATABASE_URL = "sqlite:///./test.db"  # 使用SQLite数据库
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+DATABASE_URL = dbBaseURl  # 使用SQLite数据库
+# 创建异步引擎
+async_engine = create_async_engine(DATABASE_URL, echo=True)
+
+# 创建异步会话工厂
+AsyncSessionLocal = sessionmaker(
+    bind=async_engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)
+
 Base = declarative_base()
 
 # 用户模型
