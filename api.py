@@ -4,6 +4,8 @@
 """
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
+import asyncio
+import platform
 from models import Base, async_engine
 from routes import (
     auth_router, 
@@ -12,7 +14,11 @@ from routes import (
     users_router,
     chat_router,
 )
-from AIservices import aiyasaxi_router
+from AIservices import (
+    aiyasaxi_router,
+    tools_router,
+    weather_router
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -21,6 +27,13 @@ async def lifespan(app: FastAPI):
     :param app: FastAPI应用实例
     """
     print("正在启动服务...")
+    # 在Windows环境下设置ProactorEventLoop
+    if platform.system() == 'Windows':
+        loop = asyncio.get_event_loop()
+        if not isinstance(loop, asyncio.ProactorEventLoop):
+            asyncio.set_event_loop(asyncio.ProactorEventLoop())
+            print("已设置ProactorEventLoop用于Windows环境")
+    
     # 启动时初始化数据库表
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -42,6 +55,8 @@ app.include_router(verification_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(aiyasaxi_router, prefix="/api/v1")
+app.include_router(tools_router, prefix="/api/v1")
+app.include_router(weather_router, prefix="/api/v1")
 
 # 根路由
 @app.get("/")
